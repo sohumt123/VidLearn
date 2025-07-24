@@ -6,6 +6,13 @@ interface VideoTutorOverlay {
   transcripts: Array<{timestamp: number, text: string}>;
 }
 
+// Extend HTMLVideoElement to include captureStream
+declare global {
+  interface HTMLVideoElement {
+    captureStream?(): MediaStream;
+  }
+}
+
 class VideoTutor {
   private overlays: Map<HTMLVideoElement, VideoTutorOverlay> = new Map();
   private audioContext?: AudioContext;
@@ -108,82 +115,88 @@ class VideoTutor {
 
   private createControlBar(video: HTMLVideoElement): HTMLDivElement {
     const controlBar = document.createElement('div');
-    controlBar.className = 'tutor-control-bar';
+    controlBar.className = 'tutor-control-bar slide-in-bottom';
     controlBar.style.cssText = `
       position: absolute;
-      bottom: 10px;
-      right: 10px;
-      background: rgba(0, 0, 0, 0.7);
-      backdrop-filter: blur(8px);
-      border-radius: 8px;
-      padding: 8px 12px;
+      bottom: 16px;
+      right: 16px;
+      padding: 12px 16px;
       display: flex;
-      gap: 8px;
+      gap: 12px;
       pointer-events: auto;
       z-index: 10000;
       cursor: move;
-      transition: opacity 0.3s ease;
+      border-radius: 16px;
     `;
     
     // Make control bar draggable
     this.makeDraggable(controlBar);
 
     const recordButton = document.createElement('button');
-    recordButton.textContent = '🎤 Record';
+    recordButton.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+        <circle cx="12" cy="12" r="6"/>
+      </svg>
+      <span style="margin-left: 6px;">Record</span>
+    `;
+    recordButton.className = 'ai-button ai-button-record';
     recordButton.style.cssText = `
-      background: #dc2626;
-      color: white;
-      padding: 8px 12px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
+      padding: 10px 16px;
       pointer-events: auto;
-      margin-right: 4px;
+      display: flex;
+      align-items: center;
+      border: none;
     `;
     recordButton.onclick = () => this.handleRecordClick(video);
 
     const askButton = document.createElement('button');
-    askButton.textContent = 'Ask';
+    askButton.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+      </svg>
+      <span style="margin-left: 6px;">Ask AI</span>
+    `;
+    askButton.className = 'ai-button ai-button-ask';
     askButton.style.cssText = `
-      background: #2563eb;
-      color: white;
-      padding: 8px 12px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
+      padding: 10px 16px;
       pointer-events: auto;
-      margin-right: 4px;
+      display: flex;
+      align-items: center;
+      border: none;
     `;
     askButton.onclick = () => this.handleAskClick(video);
 
     const transcriptButton = document.createElement('button');
-    transcriptButton.textContent = '📝 Transcript';
+    transcriptButton.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+      </svg>
+      <span style="margin-left: 6px;">Transcript</span>
+    `;
+    transcriptButton.className = 'ai-button ai-button-transcript';
     transcriptButton.style.cssText = `
-      background: #059669;
-      color: white;
-      padding: 8px 12px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
+      padding: 10px 16px;
       pointer-events: auto;
-      margin-right: 4px;
+      display: flex;
+      align-items: center;
+      border: none;
     `;
     transcriptButton.onclick = () => this.handleTranscriptClick(video);
 
     const settingsButton = document.createElement('button');
-    settingsButton.textContent = '⚙️';
+    settingsButton.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+        <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+      </svg>
+    `;
+    settingsButton.className = 'ai-button ai-button-settings';
     settingsButton.style.cssText = `
-      background: #6b7280;
-      color: white;
-      padding: 8px 12px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
+      padding: 10px 12px;
       pointer-events: auto;
+      display: flex;
+      align-items: center;
+      border: none;
     `;
 
     controlBar.appendChild(recordButton);
@@ -196,75 +209,108 @@ class VideoTutor {
 
   private createChatPanel(): HTMLDivElement {
     const chatPanel = document.createElement('div');
-    chatPanel.className = 'tutor-chat-panel';
+    chatPanel.className = 'tutor-chat-panel slide-in-right';
     chatPanel.style.cssText = `
       position: absolute;
-      top: 10px;
-      right: 10px;
-      width: 300px;
-      max-height: 400px;
-      background: rgba(0, 0, 0, 0.8);
-      backdrop-filter: blur(12px);
-      border-radius: 8px;
-      padding: 16px;
+      top: 16px;
+      right: 16px;
+      width: 380px;
+      max-height: 520px;
+      padding: 20px;
       display: none;
       flex-direction: column;
-      gap: 12px;
+      gap: 16px;
       pointer-events: auto;
-      color: white;
-      font-family: system-ui, sans-serif;
       cursor: move;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      border-radius: 20px;
     `;
     
     // Make chat panel draggable
     this.makeDraggable(chatPanel);
+
+    // Modern header
+    const header = document.createElement('div');
+    header.className = 'ai-panel-header';
+    header.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    `;
+
+    const title = document.createElement('h3');
+    title.className = 'ai-panel-title';
+    title.innerHTML = `
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 8px; vertical-align: middle;">
+        <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+      </svg>
+      AI Tutor Chat
+    `;
+    title.style.cssText = `
+      margin: 0;
+      display: flex;
+      align-items: center;
+    `;
+
+    const closeButton = document.createElement('button');
+    closeButton.className = 'ai-close-button';
+    closeButton.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M6 18L18 6M6 6l12 12"/>
+      </svg>
+    `;
+    closeButton.onclick = () => {
+      chatPanel.style.display = 'none';
+    };
+
+    header.appendChild(title);
+    header.appendChild(closeButton);
 
     const messagesContainer = document.createElement('div');
     messagesContainer.className = 'messages-container';
     messagesContainer.style.cssText = `
       flex: 1;
       overflow-y: auto;
-      max-height: 300px;
+      max-height: 350px;
+      padding-right: 8px;
+      margin-right: -8px;
     `;
 
     const inputContainer = document.createElement('div');
     inputContainer.style.cssText = `
       display: flex;
-      gap: 8px;
+      gap: 12px;
+      align-items: flex-end;
     `;
 
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Ask about the video...';
-    input.className = 'flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white';
+    input.placeholder = 'Ask me about this video...';
+    input.className = 'ai-input';
     input.style.cssText = `
       flex: 1;
-      padding: 8px 12px;
-      background: #374151;
-      border: 1px solid #4B5563;
-      border-radius: 4px;
-      color: white;
-      outline: none;
+      padding: 12px 16px;
+      font-size: 14px;
+      line-height: 1.5;
     `;
 
     const sendButton = document.createElement('button');
-    sendButton.textContent = 'Send';
+    sendButton.className = 'ai-button ai-button-ask';
+    sendButton.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+      </svg>
+    `;
     sendButton.style.cssText = `
-      background: #2563eb;
-      color: white;
-      padding: 8px 16px;
+      padding: 12px 16px;
       border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 14px;
+      min-width: 48px;
     `;
 
     input.addEventListener('keydown', (e) => {
       // Prevent YouTube keyboard shortcuts when typing
       e.stopPropagation();
       
-      if (e.key === 'Enter') {
+      if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         this.handleSendMessage(input, messagesContainer);
       }
@@ -285,6 +331,7 @@ class VideoTutor {
     inputContainer.appendChild(input);
     inputContainer.appendChild(sendButton);
 
+    chatPanel.appendChild(header);
     chatPanel.appendChild(messagesContainer);
     chatPanel.appendChild(inputContainer);
 
@@ -293,60 +340,53 @@ class VideoTutor {
 
   private createTranscriptPanel(): HTMLDivElement {
     const transcriptPanel = document.createElement('div');
-    transcriptPanel.className = 'tutor-transcript-panel';
+    transcriptPanel.className = 'tutor-transcript-panel slide-in-left';
     transcriptPanel.style.cssText = `
       position: absolute;
-      top: 10px;
-      left: 10px;
-      width: 350px;
-      max-height: 400px;
-      background: rgba(0, 0, 0, 0.8);
-      backdrop-filter: blur(12px);
-      border-radius: 8px;
-      padding: 16px;
+      top: 16px;
+      left: 16px;
+      width: 420px;
+      max-height: 520px;
+      padding: 20px;
       display: none;
       flex-direction: column;
-      gap: 12px;
+      gap: 16px;
       pointer-events: auto;
-      color: white;
-      font-family: system-ui, sans-serif;
       cursor: move;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      border-radius: 20px;
     `;
     
     // Make transcript panel draggable
     this.makeDraggable(transcriptPanel);
 
     const header = document.createElement('div');
+    header.className = 'ai-panel-header';
     header.style.cssText = `
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 8px;
     `;
 
     const title = document.createElement('h3');
-    title.textContent = 'Live Transcript';
+    title.className = 'ai-panel-title';
+    title.innerHTML = `
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 8px; vertical-align: middle;">
+        <path d="M19 11H5m14-4H5m14 8H5m6 4H5"/>
+      </svg>
+      Live Transcript
+    `;
     title.style.cssText = `
       margin: 0;
-      font-size: 16px;
-      font-weight: 600;
+      display: flex;
+      align-items: center;
     `;
 
     const closeButton = document.createElement('button');
-    closeButton.textContent = '×';
-    closeButton.style.cssText = `
-      background: none;
-      border: none;
-      color: white;
-      font-size: 20px;
-      cursor: pointer;
-      padding: 0;
-      width: 24px;
-      height: 24px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+    closeButton.className = 'ai-close-button';
+    closeButton.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M6 18L18 6M6 6l12 12"/>
+      </svg>
     `;
     closeButton.onclick = () => {
       transcriptPanel.style.display = 'none';
@@ -360,22 +400,31 @@ class VideoTutor {
     transcriptContent.style.cssText = `
       flex: 1;
       overflow-y: auto;
-      max-height: 320px;
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 4px;
-      padding: 8px;
+      max-height: 420px;
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 16px;
       font-size: 14px;
-      line-height: 1.4;
+      line-height: 1.6;
       white-space: pre-wrap;
+      color: var(--text-secondary);
+      font-family: 'Inter', monospace;
+      padding-right: 12px;
+      margin-right: -8px;
     `;
 
     const placeholder = document.createElement('div');
-    placeholder.textContent = 'Start recording to see live transcript...';
-    placeholder.style.cssText = `
-      color: #9CA3AF;
-      font-style: italic;
-      text-align: center;
-      padding: 20px;
+    placeholder.innerHTML = `
+      <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor" style="margin-bottom: 16px; opacity: 0.5;">
+          <path d="M12 14l9-5-9-5-9 5 9 5z"/>
+          <path d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z"/>
+        </svg>
+        <div style="font-weight: 500; margin-bottom: 8px;">Ready to transcribe</div>
+        <div style="font-size: 13px; opacity: 0.7;">Click "Record" to start capturing live transcript</div>
+      </div>
     `;
     transcriptContent.appendChild(placeholder);
 
@@ -387,84 +436,171 @@ class VideoTutor {
 
   private makeDraggable(element: HTMLElement) {
     let isDragging = false;
-    let currentX = 0;
-    let currentY = 0;
-    let initialX = 0;
-    let initialY = 0;
-    let xOffset = 0;
-    let yOffset = 0;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let elementStartX = 0;
+    let elementStartY = 0;
+
+    const getElementPosition = () => {
+      const rect = element.getBoundingClientRect();
+      const parentRect = element.parentElement!.getBoundingClientRect();
+      return {
+        x: rect.left - parentRect.left,
+        y: rect.top - parentRect.top
+      };
+    };
+
+    const constrainPosition = (x: number, y: number) => {
+      const parent = element.parentElement!;
+      const parentRect = parent.getBoundingClientRect();
+      const elementRect = element.getBoundingClientRect();
+      
+      // Calculate boundaries
+      const minX = 0;
+      const minY = 0;
+      const maxX = parentRect.width - elementRect.width;
+      const maxY = parentRect.height - elementRect.height;
+      
+      // Constrain within bounds
+      const constrainedX = Math.max(minX, Math.min(maxX, x));
+      const constrainedY = Math.max(minY, Math.min(maxY, y));
+      
+      return { x: constrainedX, y: constrainedY };
+    };
 
     const dragStart = (e: MouseEvent) => {
-      // Only allow dragging if not clicking on buttons or inputs
+      // Only allow dragging if not clicking on buttons, inputs, or SVGs
       const target = e.target as HTMLElement;
-      if (target.tagName === 'BUTTON' || target.tagName === 'INPUT') {
+      if (target.tagName === 'BUTTON' || 
+          target.tagName === 'INPUT' || 
+          target.tagName === 'svg' ||
+          target.tagName === 'path' ||
+          target.closest('button') ||
+          target.closest('input')) {
         return;
       }
 
-      initialX = e.clientX - xOffset;
-      initialY = e.clientY - yOffset;
-
-      if (e.target === element) {
-        isDragging = true;
-        element.style.cursor = 'grabbing';
-      }
-    };
-
-    const dragEnd = () => {
-      initialX = currentX;
-      initialY = currentY;
-      isDragging = false;
-      element.style.cursor = 'move';
+      isDragging = true;
+      element.style.cursor = 'grabbing';
+      element.style.userSelect = 'none';
+      
+      // Store initial mouse position
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      
+      // Store initial element position
+      const pos = getElementPosition();
+      elementStartX = pos.x;
+      elementStartY = pos.y;
+      
+      // Ensure element is positioned absolutely
+      element.style.position = 'absolute';
+      element.style.right = 'auto';
+      element.style.bottom = 'auto';
+      
+      e.preventDefault();
     };
 
     const drag = (e: MouseEvent) => {
-      if (isDragging) {
-        e.preventDefault();
-        currentX = e.clientX - initialX;
-        currentY = e.clientY - initialY;
-        xOffset = currentX;
-        yOffset = currentY;
-
-        element.style.left = `${currentX}px`;
-        element.style.top = `${currentY}px`;
-        element.style.right = 'auto';
-        element.style.bottom = 'auto';
-      }
+      if (!isDragging) return;
+      
+      e.preventDefault();
+      
+      // Calculate movement delta
+      const deltaX = e.clientX - dragStartX;
+      const deltaY = e.clientY - dragStartY;
+      
+      // Calculate new position
+      const newX = elementStartX + deltaX;
+      const newY = elementStartY + deltaY;
+      
+      // Apply constraints
+      const constrainedPos = constrainPosition(newX, newY);
+      
+      // Apply position
+      element.style.left = `${constrainedPos.x}px`;
+      element.style.top = `${constrainedPos.y}px`;
     };
 
+    const dragEnd = () => {
+      if (!isDragging) return;
+      
+      isDragging = false;
+      element.style.cursor = 'move';
+      element.style.userSelect = 'auto';
+    };
+
+    // Add event listeners
     element.addEventListener('mousedown', dragStart);
     document.addEventListener('mousemove', drag);
     document.addEventListener('mouseup', dragEnd);
+    
+    // Prevent default drag behavior on images and other elements
+    element.addEventListener('dragstart', (e) => e.preventDefault());
   }
 
   private async setupAudioCapture(video: HTMLVideoElement) {
     try {
-      console.log('🎓 VideoTutor: Requesting audio capture permissions...');
+      console.log('🎓 VideoTutor: Setting up direct video audio capture...');
       
-      // Try getDisplayMedia with audio first
       let stream;
+      
+      // Method 1: Try to capture audio directly from the video element
       try {
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            sampleRate: 16000
-          },
-          video: false
-        });
-        console.log('🎓 VideoTutor: Screen audio capture successful');
-      } catch (displayError) {
-        console.log('🎓 VideoTutor: Screen audio failed, trying microphone...', displayError);
+        if (video.captureStream) {
+          stream = video.captureStream();
+          console.log('🎓 VideoTutor: Direct video audio capture successful');
+        } else {
+          throw new Error('captureStream not supported');
+        }
+      } catch (videoError) {
+        console.log('🎓 VideoTutor: Direct video capture failed, trying tab capture...', videoError);
         
-        // Fallback to getUserMedia for microphone
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            sampleRate: 16000
+        // Method 2: Try tab capture using chrome.tabCapture API
+        try {
+          // Request tab capture permission via background script
+          const response = await chrome.runtime.sendMessage({action: 'requestTabCapture'});
+          if (response.streamId) {
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                mandatory: {
+                  chromeMediaSource: 'tab',
+                  chromeMediaSourceId: response.streamId
+                }
+              }
+            } as any);
+            console.log('🎓 VideoTutor: Tab audio capture successful');
+          } else {
+            throw new Error('Tab capture failed');
           }
-        });
-        console.log('🎓 VideoTutor: Microphone audio capture successful');
+        } catch (tabError) {
+          console.log('🎓 VideoTutor: Tab capture failed, trying display media...', tabError);
+          
+          // Method 3: Fallback to getDisplayMedia with audio
+          try {
+            stream = await navigator.mediaDevices.getDisplayMedia({
+              audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                sampleRate: 16000
+              },
+              video: false
+            });
+            console.log('🎓 VideoTutor: Display media audio capture successful');
+          } catch (displayError) {
+            console.log('🎓 VideoTutor: Display media failed, using microphone...', displayError);
+            
+            // Method 4: Final fallback to microphone
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                sampleRate: 16000
+              }
+            });
+            console.log('🎓 VideoTutor: Microphone audio capture successful');
+          }
+        }
       }
 
       this.audioContext = new AudioContext({ sampleRate: 16000 });
@@ -497,7 +633,9 @@ class VideoTutor {
 
   private connectWebSocket(video: HTMLVideoElement) {
     try {
-      const ws = new WebSocket('ws://localhost:8000/audio');
+      const videoId = this.getVideoId();
+      console.log('🎓 VideoTutor: Connecting WebSocket with videoId:', videoId);
+      const ws = new WebSocket(`ws://localhost:8000/audio?video_id=${encodeURIComponent(videoId)}`);
       const overlay = this.overlays.get(video);
       
       if (overlay) {
@@ -511,18 +649,26 @@ class VideoTutor {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (data.type === 'transcription' && data.text.trim()) {
-            console.log('🎓 VideoTutor: Transcription:', data.text);
+          if (data.type === 'transcription') {
+            console.log('🎓 VideoTutor: Raw transcription received:', data.text);
             
-            // Store transcript in overlay
-            if (overlay) {
-              overlay.transcripts.push({
-                timestamp: data.timestamp || Date.now(),
-                text: data.text
-              });
+            if (data.text.trim()) {
+              console.log('🎓 VideoTutor: Adding transcription to storage:', data.text);
               
-              // Update transcript panel if it's visible
-              this.updateTranscriptPanel(video);
+              // Store transcript in overlay
+              if (overlay) {
+                overlay.transcripts.push({
+                  timestamp: data.timestamp || Date.now(),
+                  text: data.text
+                });
+                
+                console.log('🎓 VideoTutor: Total transcripts stored:', overlay.transcripts.length);
+                
+                // Update transcript panel if it's visible
+                this.updateTranscriptPanel(video);
+              }
+            } else {
+              console.log('🎓 VideoTutor: Skipping empty transcription');
             }
           }
         } catch (error) {
@@ -542,22 +688,42 @@ class VideoTutor {
     }
   }
 
-  private processAudioStream(source: MediaStreamAudioSourceNode, video: HTMLVideoElement) {
-    const processor = this.audioContext!.createScriptProcessor(4096, 1, 1);
-    
-    processor.onaudioprocess = (event) => {
-      const inputBuffer = event.inputBuffer;
-      const inputData = inputBuffer.getChannelData(0);
+  private async processAudioStream(source: MediaStreamAudioSourceNode, video: HTMLVideoElement) {
+    try {
+      // Try to use modern AudioWorkletNode
+      await this.audioContext!.audioWorklet.addModule('data:text/javascript,class%20AudioProcessor%20extends%20AudioWorkletProcessor%20%7B%0A%20%20process(inputs%2C%20outputs%2C%20parameters)%20%7B%0A%20%20%20%20const%20input%20%3D%20inputs%5B0%5D%3B%0A%20%20%20%20if%20(input%20%26%26%20input%5B0%5D)%20%7B%0A%20%20%20%20%20%20this.port.postMessage(%7B%20audioData%3A%20Array.from(input%5B0%5D)%20%7D)%3B%0A%20%20%20%20%7D%0A%20%20%20%20return%20true%3B%0A%20%20%7D%0A%7D%0AregisterProcessor(%27audio-processor%27%2C%20AudioProcessor)%3B');
       
-      const overlay = this.overlays.get(video);
-      if (overlay?.websocket?.readyState === WebSocket.OPEN) {
-        const pcmData = this.convertToPCM(inputData);
-        overlay.websocket.send(pcmData);
-      }
-    };
+      const workletNode = new AudioWorkletNode(this.audioContext!, 'audio-processor');
+      workletNode.port.onmessage = (event) => {
+        const { audioData } = event.data;
+        const overlay = this.overlays.get(video);
+        if (overlay?.websocket?.readyState === WebSocket.OPEN && audioData) {
+          const pcmData = this.convertToPCM(new Float32Array(audioData));
+          overlay.websocket.send(pcmData);
+        }
+      };
+      
+      source.connect(workletNode);
+      workletNode.connect(this.audioContext!.destination);
+    } catch (error) {
+      console.log('🎓 VideoTutor: AudioWorklet not supported, falling back to ScriptProcessor', error);
+      // Fallback to ScriptProcessor (with warning suppression)
+      const processor = this.audioContext!.createScriptProcessor(4096, 1, 1);
+      
+      processor.onaudioprocess = (event) => {
+        const inputBuffer = event.inputBuffer;
+        const inputData = inputBuffer.getChannelData(0);
+        
+        const overlay = this.overlays.get(video);
+        if (overlay?.websocket?.readyState === WebSocket.OPEN) {
+          const pcmData = this.convertToPCM(inputData);
+          overlay.websocket.send(pcmData);
+        }
+      };
 
-    source.connect(processor);
-    processor.connect(this.audioContext!.destination);
+      source.connect(processor);
+      processor.connect(this.audioContext!.destination);
+    }
   }
 
   private convertToPCM(float32Array: Float32Array): ArrayBuffer {
@@ -576,26 +742,43 @@ class VideoTutor {
     const overlay = this.overlays.get(video);
     if (!overlay) return;
 
-    const recordButton = overlay.element.querySelector('button') as HTMLButtonElement;
+    const recordButton = overlay.element.querySelector('.ai-button-record') as HTMLButtonElement;
     
     try {
       if (!overlay.audioStream) {
         console.log('🎓 VideoTutor: Starting audio capture...');
-        recordButton.textContent = '⏸️ Stop';
-        recordButton.className = 'bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm';
+        recordButton.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12" rx="2"/>
+          </svg>
+          <span style="margin-left: 6px;">Stop</span>
+        `;
+        recordButton.classList.add('recording');
         
         await this.setupAudioCapture(video);
       } else {
         console.log('🎓 VideoTutor: Stopping audio capture...');
-        recordButton.textContent = '🎤 Record';
-        recordButton.className = 'bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm';
+        recordButton.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="12" cy="12" r="6"/>
+          </svg>
+          <span style="margin-left: 6px;">Record</span>
+        `;
+        recordButton.classList.remove('recording');
         
         this.stopAudioCapture(video);
       }
     } catch (error) {
       console.error('🎓 VideoTutor: Audio capture error:', error);
-      recordButton.textContent = '❌ Failed';
-      recordButton.className = 'bg-gray-600 text-white px-3 py-1 rounded text-sm';
+      recordButton.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+        <span style="margin-left: 6px;">Failed</span>
+      `;
+      recordButton.classList.remove('recording');
+      recordButton.style.opacity = '0.6';
+      recordButton.style.cursor = 'not-allowed';
     }
   }
 
@@ -678,6 +861,8 @@ class VideoTutor {
     try {
       const videoId = this.getVideoId();
       const timestamp = this.getCurrentTimestamp();
+      
+      console.log('🎓 VideoTutor: Sending query with videoId:', videoId, 'message:', message);
 
       const response = await fetch('http://localhost:8000/query', {
         method: 'POST',
@@ -693,6 +878,10 @@ class VideoTutor {
 
       // Remove loading message
       loadingElement.remove();
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
 
       const reader = response.body?.getReader();
       let assistantMessage = '';
@@ -723,56 +912,88 @@ class VideoTutor {
         }
       }
     } catch (error) {
-      console.error('Error sending message:', error);
+      console.error('🎓 VideoTutor: Error sending message:', error);
       // Remove loading message if still there
       if (loadingElement.parentNode) {
         loadingElement.remove();
       }
-      this.addMessage(messagesContainer, 'Error: Could not send message', 'error');
+      
+      // Show more detailed error
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      this.addMessage(messagesContainer, `Error: ${errorMsg}`, 'error');
     }
   }
 
   private addLoadingMessage(container: HTMLDivElement): HTMLDivElement {
     const messageDiv = document.createElement('div');
-    messageDiv.className = 'message-loading';
+    messageDiv.className = 'message-loading slide-in-left';
     messageDiv.style.cssText = `
-      padding: 8px 12px;
-      border-radius: 8px;
-      margin-bottom: 8px;
-      background: #374151;
-      color: white;
+      padding: 16px 20px;
+      margin-bottom: 12px;
       font-size: 14px;
-      line-height: 1.4;
+      line-height: 1.5;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      animation-delay: 0.1s;
+    `;
+
+    const avatar = document.createElement('div');
+    avatar.style.cssText = `
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--ai-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    `;
+    avatar.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
+        <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+      </svg>
+    `;
+
+    const textContainer = document.createElement('div');
+    textContainer.style.cssText = `
+      flex: 1;
       display: flex;
       align-items: center;
       gap: 8px;
     `;
 
-    const dotsContainer = document.createElement('span');
-    dotsContainer.innerHTML = 'Thinking<span class="loading-dots"></span>';
-    
-    const style = document.createElement('style');
-    style.textContent = `
-      .loading-dots::after {
-        content: '';
-        animation: loading-dots 1.5s infinite;
-      }
-      
-      @keyframes loading-dots {
-        0% { content: ''; }
-        25% { content: '.'; }
-        50% { content: '..'; }
-        75% { content: '...'; }
-        100% { content: ''; }
-      }
+    const thinkingText = document.createElement('span');
+    thinkingText.textContent = 'AI is thinking';
+    thinkingText.style.cssText = `
+      font-weight: 500;
+      color: var(--text-secondary);
     `;
-    
-    if (!document.head.querySelector('style[data-loading-dots]')) {
-      style.setAttribute('data-loading-dots', 'true');
-      document.head.appendChild(style);
+
+    const dotsContainer = document.createElement('div');
+    dotsContainer.style.cssText = `
+      display: flex;
+      gap: 4px;
+    `;
+
+    for (let i = 0; i < 3; i++) {
+      const dot = document.createElement('div');
+      dot.style.cssText = `
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--text-muted);
+        animation: pulse 1.5s infinite;
+        animation-delay: ${i * 0.2}s;
+      `;
+      dotsContainer.appendChild(dot);
     }
+
+    textContainer.appendChild(thinkingText);
+    textContainer.appendChild(dotsContainer);
+    messageDiv.appendChild(avatar);
+    messageDiv.appendChild(textContainer);
     
-    messageDiv.appendChild(dotsContainer);
     container.appendChild(messageDiv);
     container.scrollTop = container.scrollHeight;
     
@@ -781,17 +1002,76 @@ class VideoTutor {
 
   private addMessage(container: HTMLDivElement, text: string, type: 'user' | 'assistant' | 'error'): HTMLDivElement {
     const messageDiv = document.createElement('div');
-    messageDiv.className = `message-${type}`;
-    messageDiv.style.cssText = `
-      padding: 8px 12px;
-      border-radius: 8px;
-      margin-bottom: 8px;
-      background: ${type === 'user' ? '#2563EB' : type === 'error' ? '#DC2626' : '#374151'};
-      color: white;
-      font-size: 14px;
-      line-height: 1.4;
-    `;
-    messageDiv.textContent = text;
+    const animationClass = type === 'user' ? 'slide-in-right' : 'slide-in-left';
+    messageDiv.className = `message-${type} ${animationClass}`;
+    
+    if (type === 'user') {
+      messageDiv.style.cssText = `
+        padding: 12px 18px;
+        margin-bottom: 12px;
+        font-size: 14px;
+        line-height: 1.5;
+        max-width: 80%;
+        margin-left: auto;
+        word-wrap: break-word;
+        animation-delay: 0.05s;
+      `;
+      messageDiv.textContent = text;
+    } else if (type === 'assistant') {
+      messageDiv.style.cssText = `
+        padding: 16px 20px;
+        margin-bottom: 12px;
+        font-size: 14px;
+        line-height: 1.5;
+        max-width: 85%;
+        word-wrap: break-word;
+        display: flex;
+        gap: 12px;
+        animation-delay: 0.1s;
+      `;
+
+      const avatar = document.createElement('div');
+      avatar.style.cssText = `
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: var(--ai-primary);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        align-self: flex-start;
+      `;
+      avatar.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
+          <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+        </svg>
+      `;
+
+      const textContent = document.createElement('div');
+      textContent.style.cssText = `
+        flex: 1;
+        padding-top: 2px;
+      `;
+      textContent.textContent = text;
+
+      messageDiv.appendChild(avatar);
+      messageDiv.appendChild(textContent);
+    } else { // error
+      messageDiv.style.cssText = `
+        padding: 12px 18px;
+        margin-bottom: 12px;
+        font-size: 14px;
+        line-height: 1.5;
+        max-width: 90%;
+        margin: 0 auto 12px auto;
+        word-wrap: break-word;
+        text-align: center;
+        animation-delay: 0.1s;
+      `;
+      messageDiv.textContent = text;
+    }
+    
     container.appendChild(messageDiv);
     container.scrollTop = container.scrollHeight;
     return messageDiv;

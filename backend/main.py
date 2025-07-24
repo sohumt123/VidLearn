@@ -6,6 +6,7 @@ import time
 import wave
 from typing import Dict, List, Optional
 import logging
+import re
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
@@ -54,9 +55,94 @@ openai_client = None
 active_connections: Dict[str, WebSocket] = {}
 audio_buffers: Dict[str, List[bytes]] = {}
 transcript_cache: Dict[str, List[TranscriptSegment]] = {}
+conversation_memory: Dict[str, List[Dict]] = {}  # Store conversation history by video_id
 vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
 
 load_dotenv()
+
+# RAG Configuration
+RAG_CONFIG = {
+    "max_context_tokens": 15000,  # ~12K words for context
+    "max_segments": 10,           # Maximum segments to consider
+    "similarity_threshold": 0.05,  # Minimum similarity score
+    "recency_weight": 0.1,        # Boost for recent segments
+    "adjacency_bonus": 0.05,      # Bonus for adjacent segments
+}
+
+# Tutoring Response Configuration
+TUTORING_CONFIG = {
+    "explanation_keywords": ["what", "how", "why", "explain", "meaning", "definition"],
+    "summary_keywords": ["summarize", "summary", "about", "overview", "main points"],
+    "clarification_keywords": ["clarify", "confused", "understand", "clear"],
+    "application_keywords": ["example", "use", "apply", "practical", "real-world"],
+}
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimation: ~1.3 tokens per word for English"""
+    word_count = len(text.split())
+    return int(word_count * 1.3)
+
+def detect_question_type(question: str) -> str:
+    """Detect the type of question to provide more targeted responses."""
+    question_lower = question.lower()
+    
+    # Check for different question types
+    if any(keyword in question_lower for keyword in TUTORING_CONFIG["explanation_keywords"]):
+        return "explanation"
+    elif any(keyword in question_lower for keyword in TUTORING_CONFIG["summary_keywords"]):
+        return "summary"
+    elif any(keyword in question_lower for keyword in TUTORING_CONFIG["clarification_keywords"]):
+        return "clarification"
+    elif any(keyword in question_lower for keyword in TUTORING_CONFIG["application_keywords"]):
+        return "application"
+    else:
+        return "general"
+
+def get_response_focus(question_type: str) -> str:
+    """Get specific response focus based on question type."""
+    focus_map = {
+        "explanation": "Provide a clear, step-by-step explanation focusing on the underlying concepts and mechanisms.",
+        "summary": "Create a concise but comprehensive summary highlighting the key points and main takeaways.",
+        "clarification": "Address the confusion directly with a clear, simplified explanation that removes ambiguity.",
+        "application": "Focus on practical examples and real-world applications to make the concept tangible.",
+        "general": "Provide a well-rounded response that addresses the question comprehensively."
+    }
+    return focus_map.get(question_type, focus_map["general"])
+
+def combine_adjacent_segments(segments: List[TranscriptSegment], similarities: np.ndarray) -> List[TranscriptSegment]:
+    """Combine adjacent segments to reduce fragmentation and improve context"""
+    if len(segments) <= 1:
+        return segments
+    
+    combined = []
+    i = 0
+    
+    while i < len(segments):
+        current_segment = segments[i]
+        combined_text = current_segment.text
+        end_time = current_segment.end_time
+        
+        # Look ahead for adjacent segments
+        j = i + 1
+        while (j < len(segments) and 
+               segments[j].start_time - segments[j-1].end_time < 2.0 and  # Within 2 seconds
+               estimate_tokens(combined_text + " " + segments[j].text) < 500):  # Don't make chunks too large
+            combined_text += " " + segments[j].text
+            end_time = segments[j].end_time
+            j += 1
+        
+        # Create combined segment
+        combined_segment = TranscriptSegment(
+            id=current_segment.id,
+            video_id=current_segment.video_id,
+            start_time=current_segment.start_time,
+            end_time=end_time,
+            text=combined_text
+        )
+        combined.append(combined_segment)
+        i = j
+    
+    return combined
 
 def init_database():
     """Initialize SQLite database for transcript segments."""
@@ -163,30 +249,46 @@ def transcribe_audio(audio_data: bytes) -> str:
         # Convert bytes to numpy array
         audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
         
-        # Transcribe with Whisper
-        segments, info = whisper_model.transcribe(audio_np, beam_size=5)
+        # Transcribe with Whisper with optimized settings
+        segments, info = whisper_model.transcribe(
+            audio_np, 
+            beam_size=5,
+            word_timestamps=True,  # Get word-level timestamps
+            language="en"  # Force English for better performance
+        )
         
         # Combine all segments into single text
         text_parts = []
         for segment in segments:
-            text_parts.append(segment.text.strip())
+            if segment.text.strip():  # Only add non-empty segments
+                text_parts.append(segment.text.strip())
         
-        return " ".join(text_parts)
+        result = " ".join(text_parts)
+        logger.info(f"Whisper transcribed {len(audio_np)/16000:.2f}s audio -> '{result}'")
+        return result
     
     except Exception as e:
         logger.error(f"Transcription error: {e}")
         return ""
 
-def find_relevant_segments(video_id: str, query: str, max_segments: int = 5) -> List[TranscriptSegment]:
-    """Find relevant transcript segments using TF-IDF similarity."""
+def find_relevant_segments(video_id: str, query: str, max_segments: int = None) -> List[TranscriptSegment]:
+    """Advanced RAG-based segment retrieval with token awareness."""
+    if max_segments is None:
+        max_segments = RAG_CONFIG["max_segments"]
+    
+    logger.info(f"RAG: Looking for segments with video_id: {video_id}")
+    
     # Get segments from cache or database
     if video_id in transcript_cache:
         segments = transcript_cache[video_id]
+        logger.info(f"RAG: Found {len(segments)} segments in cache")
     else:
         segments = get_segments_for_video(video_id)
         transcript_cache[video_id] = segments
+        logger.info(f"RAG: Found {len(segments)} segments in database")
     
     if not segments:
+        logger.warning(f"RAG: No segments found for video_id: {video_id}")
         return []
     
     # Prepare texts for vectorization
@@ -203,19 +305,66 @@ def find_relevant_segments(video_id: str, query: str, max_segments: int = 5) -> 
         
         similarities = cosine_similarity(query_vector, segment_vectors).flatten()
         
-        # Get top segments
-        top_indices = np.argsort(similarities)[::-1][:max_segments]
+        # Apply recency weighting (boost recent segments)
+        if len(segments) > 1:
+            recency_scores = np.linspace(0, RAG_CONFIG["recency_weight"], len(segments))
+            similarities += recency_scores
         
-        relevant_segments = []
-        for idx in top_indices:
-            if similarities[idx] > 0.1:  # Minimum similarity threshold
-                relevant_segments.append(segments[idx])
+        logger.info(f"RAG: Similarity scores - max={similarities.max():.3f}, min={similarities.min():.3f}")
         
-        return relevant_segments
+        # Get candidate segments above threshold
+        candidate_indices = []
+        for idx, score in enumerate(similarities):
+            if score >= RAG_CONFIG["similarity_threshold"]:
+                candidate_indices.append((idx, score))
+        
+        # Sort by score descending
+        candidate_indices.sort(key=lambda x: x[1], reverse=True)
+        
+        if not candidate_indices:
+            logger.warning("RAG: No segments met similarity threshold, using recent segments")
+            # Fall back to most recent segments
+            recent_count = min(max_segments, len(segments))
+            return segments[-recent_count:]
+        
+        # Smart selection with token awareness
+        selected_segments = []
+        total_tokens = 0
+        
+        for idx, score in candidate_indices:
+            segment = segments[idx]
+            segment_tokens = estimate_tokens(segment.text)
+            
+            # Check if adding this segment would exceed token limit
+            if total_tokens + segment_tokens > RAG_CONFIG["max_context_tokens"]:
+                logger.info(f"RAG: Token limit reached ({total_tokens + segment_tokens} > {RAG_CONFIG['max_context_tokens']})")
+                break
+                
+            selected_segments.append(segment)
+            total_tokens += segment_tokens
+            
+            logger.info(f"RAG: Selected segment {idx} (score={score:.3f}, tokens={segment_tokens}): '{segment.text[:50]}...'")
+            
+            if len(selected_segments) >= max_segments:
+                break
+        
+        # Sort selected segments by timestamp for coherent reading
+        selected_segments.sort(key=lambda x: x.start_time)
+        
+        # Combine adjacent segments to reduce fragmentation
+        if len(selected_segments) > 1:
+            combined_segments = combine_adjacent_segments(selected_segments, similarities)
+            logger.info(f"RAG: Combined {len(selected_segments)} segments into {len(combined_segments)} chunks")
+            selected_segments = combined_segments
+        
+        logger.info(f"RAG: Final selection: {len(selected_segments)} segments, ~{total_tokens} tokens")
+        return selected_segments
         
     except Exception as e:
-        logger.error(f"Error finding relevant segments: {e}")
-        return segments[:max_segments]  # Fallback to recent segments
+        logger.error(f"RAG: Error in segment selection: {e}")
+        # Fallback to recent segments
+        recent_count = min(max_segments, len(segments))
+        return segments[-recent_count:]
 
 async def stream_openai_response(prompt: str):
     """Stream OpenAI GPT-4o response."""
@@ -227,12 +376,25 @@ async def stream_openai_response(prompt: str):
         stream = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are an AI tutor helping students understand video content. Provide clear, educational responses based on the video transcript context provided."},
+                {
+                    "role": "system", 
+                    "content": """You are an AI Video Tutor - a specialized learning companion that provides instant, intelligent tutoring while users watch educational content. 
+
+Core principles:
+• Be confident and direct in explanations
+• Use simple language for complex concepts  
+• Focus on enhancing understanding and retention
+• Reference specific video content when available
+• Provide actionable learning insights
+• Maintain pedagogical focus in all responses
+
+Always structure responses to maximize learning impact."""
+                },
                 {"role": "user", "content": prompt}
             ],
             stream=True,
-            max_tokens=500,
-            temperature=0.7
+            max_tokens=800,  # Increased for more detailed explanations
+            temperature=0.3  # Lower for more focused, consistent responses
         )
         
         for chunk in stream:
@@ -270,7 +432,10 @@ async def websocket_audio_endpoint(websocket: WebSocket):
     active_connections[connection_id] = websocket
     audio_buffers[connection_id] = []
     
-    logger.info(f"Audio WebSocket connected: {connection_id}")
+    # Try to get video_id from query params
+    video_id = websocket.query_params.get('video_id', connection_id)
+    
+    logger.info(f"Audio WebSocket connected: {connection_id} for video: {video_id}")
     
     last_process_time = time.time()
     
@@ -282,11 +447,11 @@ async def websocket_audio_endpoint(websocket: WebSocket):
             
             current_time = time.time()
             
-            # Process buffer every 5 seconds or when it gets large
+            # Process buffer every 1 second or when it gets moderately large
             buffer_size = sum(len(chunk) for chunk in audio_buffers[connection_id])
             time_elapsed = current_time - last_process_time
             
-            if time_elapsed >= 5.0 or buffer_size > 160000:  # ~5 seconds at 16kHz
+            if time_elapsed >= 1.0 or buffer_size > 32000:  # ~1 second at 16kHz
                 # Combine audio chunks
                 combined_audio = b''.join(audio_buffers[connection_id])
                 
@@ -304,13 +469,14 @@ async def websocket_audio_endpoint(websocket: WebSocket):
                             "timestamp": current_time
                         }))
                         
-                        # Save to database (simplified - using connection_id as video_id)
+                        # Save to database using actual video_id
                         segment = TranscriptSegment(
-                            video_id=connection_id,
+                            video_id=video_id,
                             start_time=last_process_time,
                             end_time=current_time,
                             text=transcript
                         )
+                        logger.info(f"Saving segment for video_id: {video_id} - '{transcript[:50]}...'")
                         save_segment(segment)
                 
                 # Clear buffer and reset timer
@@ -332,25 +498,69 @@ async def websocket_audio_endpoint(websocket: WebSocket):
 async def handle_query(request: QueryRequest):
     """Handle query requests with RAG and streaming response."""
     try:
-        # Find relevant transcript segments
+        logger.info(f"Query request for videoId: {request.videoId}")
+        
+        # Detect question type for targeted response
+        question_type = detect_question_type(request.prompt)
+        response_focus = get_response_focus(question_type)
+        logger.info(f"Detected question type: {question_type}")
+        
+        # Find relevant transcript segments using RAG
         relevant_segments = find_relevant_segments(request.videoId, request.prompt)
         
-        # Build context from relevant segments
+        logger.info(f"RAG: Selected {len(relevant_segments)} segments for query")
+        
+        # Build context from relevant segments with timestamps
         context_parts = []
+        total_context_tokens = 0
+        
         for segment in relevant_segments:
-            context_parts.append(f"[{segment.start_time:.1f}s] {segment.text}")
+            segment_text = f"[{segment.start_time:.1f}s] {segment.text}"
+            context_parts.append(segment_text)
+            total_context_tokens += estimate_tokens(segment_text)
         
         context = "\n".join(context_parts) if context_parts else "No relevant transcript context found."
+        logger.info(f"RAG: Context built with ~{total_context_tokens} tokens")
         
-        # Build enhanced prompt with context
-        enhanced_prompt = f"""Based on the following video transcript context, please answer the user's question:
+        # Build enhanced prompt with specialized tutoring context
+        enhanced_prompt = f"""You are an AI Video Tutor - an intelligent learning companion integrated directly into the user's video watching experience. Your role is to help users understand and learn from video content through real-time conversation.
+
+CONTEXT & CAPABILITIES:
+- You have access to live transcript segments from the video the user is currently watching
+- You provide instant, contextual explanations while they learn
+- You help clarify concepts, answer questions, and reinforce learning
+- You make complex topics accessible and engaging
+
+RESPONSE STYLE:
+✅ CONFIDENT & DIRECT: State information clearly without hedging ("This concept works by..." not "This might work by...")
+✅ SIMPLE BUT POWERFUL: Use clear language while maintaining technical accuracy
+✅ PEDAGOGICALLY FOCUSED: Structure responses to enhance learning and retention
+✅ CONTEXTUAL: Always reference the specific video content when relevant
+✅ CONCISE BUT DETAILED: Provide complete explanations without unnecessary verbosity
+
+QUESTION TYPE DETECTED: {question_type.upper()}
+RESPONSE FOCUS: {response_focus}
 
 VIDEO TRANSCRIPT CONTEXT:
 {context}
 
 USER QUESTION: {request.prompt}
 
-Please provide a helpful response based on the video content. If the transcript context doesn't contain enough information, acknowledge this and provide general educational guidance."""
+EXAMPLE RESPONSE PATTERNS:
+
+For EXPLANATIONS (what/how/why questions):
+"Based on the video content, [concept] works through [step-by-step process]. The key mechanism is [core principle]. This is important because [practical impact]."
+
+For SUMMARIES (about/overview questions):
+"This video covers [main topic]. The key points are: 1) [point one], 2) [point two], 3) [point three]. The central message is [core takeaway]."
+
+For CLARIFICATIONS (confused/unclear):
+"The speaker explains that [direct clarification]. To put it simply: [simplified version]. The confusion likely comes from [common misconception], but actually [correct understanding]."
+
+For APPLICATIONS (examples/practical use):
+"Here's how this applies in practice: [concrete example]. You would use this when [specific scenario]. Real-world applications include [practical uses]."
+
+Now provide your focused tutoring response with the specified focus:"""
         
         # Return streaming response
         return StreamingResponse(
@@ -374,6 +584,44 @@ async def get_transcript(video_id: str):
     return {
         "video_id": video_id,
         "segments": [segment.dict() for segment in segments]
+    }
+
+@app.get("/debug/all-transcripts")
+async def debug_all_transcripts():
+    """Debug endpoint to see all stored transcripts."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT video_id, COUNT(*) as segment_count, 
+               MIN(start_time) as first_segment, MAX(end_time) as last_segment
+        FROM segments 
+        GROUP BY video_id
+        ORDER BY MAX(created_at) DESC
+    ''')
+    
+    results = []
+    for row in cursor.fetchall():
+        results.append({
+            "video_id": row[0],
+            "segment_count": row[1],
+            "first_segment": row[2],
+            "last_segment": row[3]
+        })
+    
+    conn.close()
+    return {"stored_video_ids": results}
+
+@app.get("/debug/rag-config")
+async def debug_rag_config():
+    """Debug endpoint to see current RAG configuration."""
+    return {
+        "rag_config": RAG_CONFIG,
+        "vectorizer_features": vectorizer.max_features,
+        "cache_info": {
+            "cached_videos": list(transcript_cache.keys()),
+            "cache_sizes": {vid: len(segments) for vid, segments in transcript_cache.items()}
+        }
     }
 
 if __name__ == "__main__":

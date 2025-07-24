@@ -56,12 +56,19 @@ class PopupController {
     this.state.active = !this.state.active;
     await this.saveState();
     
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab.id) {
-      chrome.tabs.sendMessage(tab.id, { 
-        action: 'toggleExtension', 
-        state: this.state 
-      });
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab.id) {
+        chrome.tabs.sendMessage(tab.id, { 
+          action: 'toggleExtension', 
+          state: this.state 
+        }).catch((error) => {
+          console.log('Could not send message to content script:', error);
+          // This is expected if content script isn't loaded yet
+        });
+      }
+    } catch (error) {
+      console.log('Extension toggle error:', error);
     }
     
     this.updateUI();
@@ -73,7 +80,15 @@ class PopupController {
     testButton.textContent = 'Testing...';
 
     try {
-      const response = await fetch('http://localhost:8000/health');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      const response = await fetch('http://localhost:8000/health', {
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
       if (response.ok) {
         testButton.textContent = '✅ Connected';
         testButton.style.background = '#059669';
@@ -81,6 +96,7 @@ class PopupController {
         throw new Error('Backend not responding');
       }
     } catch (error) {
+      console.log('Connection test failed:', error);
       testButton.textContent = '❌ Failed';
       testButton.style.background = '#dc2626';
     }

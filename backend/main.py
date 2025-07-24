@@ -16,6 +16,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import openai
 from faster_whisper import WhisperModel
+import os
+from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +55,8 @@ active_connections: Dict[str, WebSocket] = {}
 audio_buffers: Dict[str, List[bytes]] = {}
 transcript_cache: Dict[str, List[TranscriptSegment]] = {}
 vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
+
+load_dotenv()
 
 def init_database():
     """Initialize SQLite database for transcript segments."""
@@ -121,13 +125,20 @@ async def load_models():
     global whisper_model, openai_client
     
     try:
+        # Ensure .env is loaded
+        load_dotenv()
         logger.info("Loading Whisper model...")
         whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
         logger.info("Whisper model loaded successfully")
         
         logger.info("Initializing OpenAI client...")
-        openai_client = openai.OpenAI()  # Uses OPENAI_API_KEY env var
-        logger.info("OpenAI client initialized")
+        api_key = os.getenv("OPENAI_API_KEY")
+        logger.info(f"API key read from env: {api_key[:20] if api_key else 'None'}...")
+        if not api_key or api_key == "your_openai_api_key_here":
+            raise ValueError("Please set your OPENAI_API_KEY in the .env file")
+        
+        openai_client = openai.OpenAI(api_key=api_key)
+        logger.info("OpenAI client initialized successfully")
         
     except Exception as e:
         logger.error(f"Error loading models: {e}")

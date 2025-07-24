@@ -109,6 +109,43 @@ def get_response_focus(question_type: str) -> str:
     }
     return focus_map.get(question_type, focus_map["general"])
 
+def add_to_conversation_memory(video_id: str, user_message: str, ai_response: str):
+    """Add a conversation exchange to memory."""
+    if video_id not in conversation_memory:
+        conversation_memory[video_id] = []
+    
+    conversation_memory[video_id].append({
+        "user": user_message,
+        "assistant": ai_response,
+        "timestamp": time.time()
+    })
+    
+    # Keep only last 5 exchanges to manage memory
+    if len(conversation_memory[video_id]) > 5:
+        conversation_memory[video_id] = conversation_memory[video_id][-5:]
+
+def get_conversation_context(video_id: str) -> str:
+    """Get recent conversation history for context."""
+    if video_id not in conversation_memory or not conversation_memory[video_id]:
+        return ""
+    
+    context_parts = []
+    for exchange in conversation_memory[video_id][-2:]:  # Last 2 exchanges for brevity
+        context_parts.append(f"Q: {exchange['user']}")
+        context_parts.append(f"A: {exchange['assistant'][:150]}...")  # Shorter truncation
+    
+    return "\n".join(context_parts) if context_parts else ""
+
+def is_follow_up_question(question: str) -> bool:
+    """Detect if this is a follow-up question."""
+    follow_up_indicators = [
+        "what about", "but what", "also", "and", "more about", "explain more",
+        "what else", "another", "further", "additionally", "however", "though",
+        "can you", "could you", "tell me more", "elaborate", "expand"
+    ]
+    question_lower = question.lower()
+    return any(indicator in question_lower for indicator in follow_up_indicators)
+
 def combine_adjacent_segments(segments: List[TranscriptSegment], similarities: np.ndarray) -> List[TranscriptSegment]:
     """Combine adjacent segments to reduce fragmentation and improve context"""
     if len(segments) <= 1:
@@ -366,8 +403,8 @@ def find_relevant_segments(video_id: str, query: str, max_segments: int = None) 
         recent_count = min(max_segments, len(segments))
         return segments[-recent_count:]
 
-async def stream_openai_response(prompt: str):
-    """Stream OpenAI GPT-4o response."""
+async def stream_openai_response(prompt: str, video_id: str = None, user_message: str = None):
+    """Stream OpenAI GPT-4o response with conversation memory."""
     if not openai_client:
         yield "data: {\"error\": \"OpenAI client not initialized\"}\n\n"
         return
@@ -393,14 +430,24 @@ Always structure responses to maximize learning impact."""
                 {"role": "user", "content": prompt}
             ],
             stream=True,
-            max_tokens=800,  # Increased for more detailed explanations
-            temperature=0.3  # Lower for more focused, consistent responses
+            max_tokens=300,  # Reduced for concise responses
+            temperature=0.2  # Lower for more focused, consistent responses
         )
+        
+        # Collect full response for memory storage
+        full_response = ""
         
         for chunk in stream:
             if chunk.choices[0].delta.content is not None:
                 content = chunk.choices[0].delta.content
+                full_response += content
                 yield f"data: {json.dumps({'choices': [{'delta': {'content': content}}]})}\n\n"
+        
+        # Store conversation in memory after streaming completes
+        if video_id and user_message and full_response:
+            add_to_conversation_memory(video_id, user_message, full_response)
+            logger.info(f"Stored conversation exchange for video {video_id}: Q='{user_message[:50]}...' A='{full_response[:50]}...'")
+            logger.info(f"Total conversations for {video_id}: {len(conversation_memory.get(video_id, []))}")
         
         yield "data: [DONE]\n\n"
         
@@ -500,10 +547,17 @@ async def handle_query(request: QueryRequest):
     try:
         logger.info(f"Query request for videoId: {request.videoId}")
         
+        # Get conversation context for follow-up questions
+        conversation_context = get_conversation_context(request.videoId)
+        is_follow_up = is_follow_up_question(request.prompt)
+        
         # Detect question type for targeted response
         question_type = detect_question_type(request.prompt)
         response_focus = get_response_focus(question_type)
-        logger.info(f"Detected question type: {question_type}")
+        logger.info(f"Query for video {request.videoId}: Question type: {question_type}, Follow-up: {is_follow_up}")
+        logger.info(f"Conversation context length: {len(conversation_context)} chars")
+        if conversation_context:
+            logger.info(f"Context preview: {conversation_context[:200]}...")
         
         # Find relevant transcript segments using RAG
         relevant_segments = find_relevant_segments(request.videoId, request.prompt)
@@ -522,49 +576,29 @@ async def handle_query(request: QueryRequest):
         context = "\n".join(context_parts) if context_parts else "No relevant transcript context found."
         logger.info(f"RAG: Context built with ~{total_context_tokens} tokens")
         
-        # Build enhanced prompt with specialized tutoring context
-        enhanced_prompt = f"""You are an AI Video Tutor - an intelligent learning companion integrated directly into the user's video watching experience. Your role is to help users understand and learn from video content through real-time conversation.
+        # Build concise enhanced prompt
+        enhanced_prompt = f"""You are an AI Video Tutor. Provide CONCISE, TO-THE-POINT explanations.
 
-CONTEXT & CAPABILITIES:
-- You have access to live transcript segments from the video the user is currently watching
-- You provide instant, contextual explanations while they learn
-- You help clarify concepts, answer questions, and reinforce learning
-- You make complex topics accessible and engaging
+RESPONSE RULES:
+- Keep answers SHORT and DIRECT (2-3 sentences max)
+- Use simple language, avoid jargon
+- Focus on the essential concept only
+- Use markdown formatting (**bold**, `code`, ### headers, - bullets)
 
-RESPONSE STYLE:
-✅ CONFIDENT & DIRECT: State information clearly without hedging ("This concept works by..." not "This might work by...")
-✅ SIMPLE BUT POWERFUL: Use clear language while maintaining technical accuracy
-✅ PEDAGOGICALLY FOCUSED: Structure responses to enhance learning and retention
-✅ CONTEXTUAL: Always reference the specific video content when relevant
-✅ CONCISE BUT DETAILED: Provide complete explanations without unnecessary verbosity
+{f"CONTEXT FROM PREVIOUS CHAT:\n{conversation_context}\n" if conversation_context else ""}
 
-QUESTION TYPE DETECTED: {question_type.upper()}
-RESPONSE FOCUS: {response_focus}
-
-VIDEO TRANSCRIPT CONTEXT:
+VIDEO TRANSCRIPT:
 {context}
 
-USER QUESTION: {request.prompt}
+QUESTION: {request.prompt}
 
-EXAMPLE RESPONSE PATTERNS:
+{"This is a FOLLOW-UP question - reference previous context briefly." if is_follow_up else ""}
 
-For EXPLANATIONS (what/how/why questions):
-"Based on the video content, [concept] works through [step-by-step process]. The key mechanism is [core principle]. This is important because [practical impact]."
-
-For SUMMARIES (about/overview questions):
-"This video covers [main topic]. The key points are: 1) [point one], 2) [point two], 3) [point three]. The central message is [core takeaway]."
-
-For CLARIFICATIONS (confused/unclear):
-"The speaker explains that [direct clarification]. To put it simply: [simplified version]. The confusion likely comes from [common misconception], but actually [correct understanding]."
-
-For APPLICATIONS (examples/practical use):
-"Here's how this applies in practice: [concrete example]. You would use this when [specific scenario]. Real-world applications include [practical uses]."
-
-Now provide your focused tutoring response with the specified focus:"""
+Give a concise, formatted answer:"""
         
-        # Return streaming response
+        # Return streaming response with conversation memory
         return StreamingResponse(
-            stream_openai_response(enhanced_prompt),
+            stream_openai_response(enhanced_prompt, request.videoId, request.prompt),
             media_type="text/plain",
             headers={
                 "Cache-Control": "no-cache",

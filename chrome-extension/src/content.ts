@@ -903,7 +903,10 @@ class VideoTutor {
               const parsed = JSON.parse(data);
               if (parsed.choices?.[0]?.delta?.content) {
                 assistantMessage += parsed.choices[0].delta.content;
-                messageElement.textContent = assistantMessage;
+                const textDiv = messageElement.querySelector('div:last-child') as HTMLDivElement;
+                if (textDiv) {
+                  textDiv.innerHTML = this.parseMarkdown(assistantMessage);
+                }
               }
             } catch (e) {
               // Ignore parsing errors
@@ -1000,6 +1003,26 @@ class VideoTutor {
     return messageDiv;
   }
 
+  private parseMarkdown(text: string): string {
+    return text
+      // Headers
+      .replace(/^### (.*$)/gm, '<h3 style="margin: 8px 0 4px 0; font-size: 16px; font-weight: 600; color: var(--text-primary);">$1</h3>')
+      .replace(/^## (.*$)/gm, '<h2 style="margin: 10px 0 6px 0; font-size: 18px; font-weight: 600; color: var(--text-primary);">$1</h2>')
+      .replace(/^# (.*$)/gm, '<h1 style="margin: 12px 0 8px 0; font-size: 20px; font-weight: 600; color: var(--text-primary);">$1</h1>')
+      // Bold
+      .replace(/\*\*(.*?)\*\*/g, '<strong style="font-weight: 600; color: var(--text-primary);">$1</strong>')
+      // Italic
+      .replace(/\*(.*?)\*/g, '<em style="font-style: italic; color: var(--text-secondary);">$1</em>')
+      // Code
+      .replace(/`([^`]+)`/g, '<code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; color: var(--text-primary);">$1</code>')
+      // Bullets
+      .replace(/^- (.*$)/gm, '<div style="margin: 4px 0; padding-left: 16px; position: relative;"><span style="position: absolute; left: 0; color: var(--text-primary);">•</span>$1</div>')
+      // Numbers
+      .replace(/^\d+\. (.*$)/gm, '<div style="margin: 4px 0; padding-left: 20px; position: relative;"><span style="position: absolute; left: 0; color: var(--text-primary); font-weight: 500;">1.</span>$1</div>')
+      // Line breaks
+      .replace(/\n/g, '<br>');
+  }
+
   private addMessage(container: HTMLDivElement, text: string, type: 'user' | 'assistant' | 'error'): HTMLDivElement {
     const messageDiv = document.createElement('div');
     const animationClass = type === 'user' ? 'slide-in-right' : 'slide-in-left';
@@ -1053,7 +1076,7 @@ class VideoTutor {
         flex: 1;
         padding-top: 2px;
       `;
-      textContent.textContent = text;
+      textContent.innerHTML = this.parseMarkdown(text);
 
       messageDiv.appendChild(avatar);
       messageDiv.appendChild(textContent);

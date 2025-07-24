@@ -111,40 +111,119 @@ def get_response_focus(question_type: str) -> str:
 
 def add_to_conversation_memory(video_id: str, user_message: str, ai_response: str):
     """Add a conversation exchange to memory."""
+    if not video_id or not user_message or not ai_response:
+        logger.warning(f"💭 Skipping conversation storage - missing data: video_id={bool(video_id)}, user={bool(user_message)}, ai={bool(ai_response)}")
+        return
+        
     if video_id not in conversation_memory:
         conversation_memory[video_id] = []
+        logger.info(f"💭 Created new conversation memory for video {video_id}")
     
-    conversation_memory[video_id].append({
-        "user": user_message,
-        "assistant": ai_response,
+    exchange = {
+        "user": user_message.strip(),
+        "assistant": ai_response.strip(),
         "timestamp": time.time()
-    })
+    }
+    
+    conversation_memory[video_id].append(exchange)
+    logger.info(f"💭 Stored conversation exchange #{len(conversation_memory[video_id])} for video {video_id}")
+    logger.info(f"💭 User: '{user_message[:100]}...' AI: '{ai_response[:100]}...'")
     
     # Keep only last 5 exchanges to manage memory
     if len(conversation_memory[video_id]) > 5:
+        removed_count = len(conversation_memory[video_id]) - 5
         conversation_memory[video_id] = conversation_memory[video_id][-5:]
+        logger.info(f"💭 Pruned {removed_count} old exchanges, kept last 5")
 
 def get_conversation_context(video_id: str) -> str:
     """Get recent conversation history for context."""
     if video_id not in conversation_memory or not conversation_memory[video_id]:
+        logger.info(f"💭 No conversation history found for video {video_id}")
         return ""
     
-    context_parts = []
-    for exchange in conversation_memory[video_id][-2:]:  # Last 2 exchanges for brevity
-        context_parts.append(f"Q: {exchange['user']}")
-        context_parts.append(f"A: {exchange['assistant'][:150]}...")  # Shorter truncation
+    exchanges = conversation_memory[video_id]
+    logger.info(f"💭 Found {len(exchanges)} conversation exchanges for video {video_id}")
     
-    return "\n".join(context_parts) if context_parts else ""
+    context_parts = []
+    # Use last 3 exchanges for better context, but with smart truncation
+    for i, exchange in enumerate(exchanges[-3:]):
+        # Keep user questions complete (they're usually short)
+        user_q = exchange['user']
+        
+        # Smart truncation for assistant responses
+        assistant_resp = exchange['assistant']
+        if len(assistant_resp) > 200:
+            # Try to truncate at sentence boundary
+            sentences = assistant_resp.split('. ')
+            truncated = sentences[0]
+            if len(truncated) < 150 and len(sentences) > 1:
+                truncated += '. ' + sentences[1]
+            assistant_resp = truncated + "..." if len(truncated) < len(assistant_resp) else truncated
+        
+        context_parts.append(f"Previous Q{i+1}: {user_q}")
+        context_parts.append(f"Previous A{i+1}: {assistant_resp}")
+    
+    context = "\n".join(context_parts) if context_parts else ""
+    logger.info(f"💭 Built conversation context: {len(context)} chars")
+    return context
 
-def is_follow_up_question(question: str) -> bool:
-    """Detect if this is a follow-up question."""
-    follow_up_indicators = [
-        "what about", "but what", "also", "and", "more about", "explain more",
-        "what else", "another", "further", "additionally", "however", "though",
-        "can you", "could you", "tell me more", "elaborate", "expand"
+def is_follow_up_question(question: str, video_id: str = None) -> bool:
+    """Enhanced follow-up question detection."""
+    question_lower = question.lower().strip()
+    
+    # Keywords that strongly indicate follow-up
+    strong_follow_up_indicators = [
+        "what about", "but what", "also what", "and what", "more about", "explain more",
+        "what else", "tell me more", "elaborate", "expand on", "go deeper",
+        "additionally", "furthermore", "however", "though", "but", "also",
+        "can you explain", "could you explain", "what do you mean"
     ]
-    question_lower = question.lower()
-    return any(indicator in question_lower for indicator in follow_up_indicators)
+    
+    # Pronouns that suggest reference to previous context  
+    contextual_pronouns = [
+        "that", "this", "it", "they", "them", "those", "these",
+        "he", "she", "his", "her", "its"
+    ]
+    
+    # Question starters that are often follow-ups
+    follow_up_starters = [
+        "why", "how", "when", "where", "what if", "what happens",
+        "so", "ok", "okay", "right", "yes but", "yeah but"
+    ]
+    
+    # Check for strong indicators
+    has_strong_indicator = any(indicator in question_lower for indicator in strong_follow_up_indicators)
+    
+    # Check for contextual pronouns (suggesting reference to previous discussion)
+    has_contextual_reference = any(pronoun in question_lower.split() for pronoun in contextual_pronouns)
+    
+    # Check for follow-up starter patterns
+    has_follow_up_starter = any(question_lower.startswith(starter) for starter in follow_up_starters)
+    
+    # Short questions are often follow-ups
+    is_short_question = len(question.split()) <= 5 and "?" in question
+    
+    # Check if there's recent conversation history
+    has_conversation_history = False
+    if video_id and video_id in conversation_memory and conversation_memory[video_id]:
+        last_exchange_time = conversation_memory[video_id][-1]["timestamp"]
+        time_since_last = time.time() - last_exchange_time
+        has_conversation_history = time_since_last < 300  # Within 5 minutes
+    
+    # Combine indicators for final decision
+    follow_up_score = 0
+    if has_strong_indicator: follow_up_score += 3
+    if has_contextual_reference: follow_up_score += 2  
+    if has_follow_up_starter: follow_up_score += 1
+    if is_short_question: follow_up_score += 1
+    if has_conversation_history: follow_up_score += 2
+    
+    is_follow_up = follow_up_score >= 2
+    
+    logger.info(f"🔄 Follow-up detection: '{question[:50]}...' Score: {follow_up_score} -> {is_follow_up}")
+    logger.info(f"   Strong: {has_strong_indicator}, Context: {has_contextual_reference}, Short: {is_short_question}, History: {has_conversation_history}")
+    
+    return is_follow_up
 
 def combine_adjacent_segments(segments: List[TranscriptSegment], similarities: np.ndarray) -> List[TranscriptSegment]:
     """Combine adjacent segments to reduce fragmentation and improve context"""
@@ -299,7 +378,7 @@ def transcribe_audio(audio_data: bytes) -> str:
         )
         
         result = transcript.strip() if transcript else ""
-        logger.info(f"OpenAI Whisper transcribed audio -> '{result}'")
+        logger.info(f"🎤 OpenAI Whisper transcribed {len(audio_data)} bytes -> '{result}'")
         return result
     
     except Exception as e:
@@ -579,18 +658,61 @@ async def handle_query(request: QueryRequest):
         
         # Get conversation context for follow-up questions
         conversation_context = get_conversation_context(request.videoId)
-        is_follow_up = is_follow_up_question(request.prompt)
+        is_follow_up = is_follow_up_question(request.prompt, request.videoId)
         
         logger.info(f"Query for video {request.videoId}: Follow-up: {is_follow_up}")
         logger.info(f"USER QUESTION: '{request.prompt}'")
         logger.info(f"Conversation context length: {len(conversation_context)} chars")
+        
+        # Debug conversation memory state
+        if request.videoId in conversation_memory:
+            exchanges = conversation_memory[request.videoId]
+            logger.info(f"💭 Memory state: {len(exchanges)} exchanges stored")
+            if exchanges:
+                last_exchange = exchanges[-1]
+                time_since_last = time.time() - last_exchange["timestamp"]
+                logger.info(f"💭 Last exchange was {time_since_last:.1f}s ago")
+        else:
+            logger.info(f"💭 No conversation memory exists for video {request.videoId}")
+            
         if conversation_context:
-            logger.info(f"Context preview: {conversation_context[:200]}...")
+            logger.info(f"💭 Context preview: {conversation_context[:200]}...")
+        else:
+            logger.info(f"💭 No conversation context available")
         
-        # Find relevant transcript segments using RAG
-        relevant_segments = find_relevant_segments(request.videoId, request.prompt)
+        # Get all segments for this video
+        all_segments = get_segments_for_video(request.videoId)
+        logger.info(f"🎥 TOTAL SEGMENTS for {request.videoId}: {len(all_segments)}")
         
-        logger.info(f"RAG: Selected {len(relevant_segments)} segments for query")
+        if all_segments:
+            logger.info(f"🎥 FIRST SEGMENT: '{all_segments[0].text[:100]}...'")
+            logger.info(f"🎥 LAST SEGMENT: '{all_segments[-1].text[:100]}...'")
+        
+        # Calculate total transcript size
+        total_transcript_text = " ".join([seg.text for seg in all_segments])
+        total_words = len(total_transcript_text.split())
+        logger.info(f"📊 TRANSCRIPT SIZE: {total_words} words")
+        
+        # Use different strategies based on transcript size
+        if total_words <= 10000:
+            # Small transcript: Use entire transcript as context
+            logger.info("📝 Using FULL TRANSCRIPT as context (small video)")
+            relevant_segments = all_segments
+        else:
+            # Large transcript: Use RAG to find relevant segments
+            logger.info("🔍 Using RAG for context selection (large video)")
+            relevant_segments = find_relevant_segments(request.videoId, request.prompt)
+            
+            logger.info(f"RAG: Selected {len(relevant_segments)} segments for query")
+            for i, seg in enumerate(relevant_segments[:3]):  # Show first 3
+                logger.info(f"RAG SEGMENT {i+1}: [{seg.start_time:.1f}s] '{seg.text[:100]}...'")
+            
+            # If RAG didn't find much, use recent segments as backup
+            if len(relevant_segments) < 3 and len(all_segments) > 0:
+                logger.info("🔄 RAG found few segments, using recent backup")
+                backup_segments = all_segments[-10:]  # Last 10 segments
+                relevant_segments.extend(backup_segments)
+                relevant_segments = relevant_segments[-10:]  # Keep last 10 total
         
         # Build context from relevant segments with timestamps
         context_parts = []
@@ -603,27 +725,46 @@ async def handle_query(request: QueryRequest):
         
         context = "\n".join(context_parts) if context_parts else "No relevant transcript context found."
         logger.info(f"RAG: Context built with ~{total_context_tokens} tokens")
+        logger.info(f"🎥 VIDEO CONTEXT: '{context[:300]}...' " if len(context) > 300 else f"🎥 VIDEO CONTEXT: '{context}'")
         
         # Build enhanced prompt focused on the actual question
-        enhanced_prompt = f"""You are a smart AI tutor. Answer the specific question asked using both the video content and your knowledge.
+        context_type = "COMPLETE VIDEO TRANSCRIPT" if total_words <= 10000 else "RELEVANT VIDEO SEGMENTS"
+        
+        if is_follow_up and conversation_context:
+            enhanced_prompt = f"""You are an AI tutor helping a user understand a video. This is a FOLLOW-UP question continuing our conversation.
 
-QUESTION TO ANSWER: {request.prompt}
+CURRENT FOLLOW-UP QUESTION: {request.prompt}
 
-VIDEO CONTENT:
+PREVIOUS CONVERSATION CONTEXT:
+{conversation_context}
+
+{context_type} (from the video):
 {context}
 
-{f"PREVIOUS CHAT:\n{conversation_context}\n" if conversation_context else ""}
+FOLLOW-UP INSTRUCTIONS:
+- This question builds on our previous discussion above
+- Reference relevant parts of our conversation when answering
+- Connect your answer to what we discussed before
+- Still use the video transcript as the primary source
+- Use **bold** for key terms, keep response 2-3 sentences
+- Show continuity with the previous conversation
+
+Provide a follow-up response that builds on our discussion:"""
+        else:
+            enhanced_prompt = f"""You are an AI tutor. The user is watching a video and asking questions about it.
+
+USER'S QUESTION: {request.prompt}
+
+{context_type} (what's being said in the video):
+{context}
 
 INSTRUCTIONS:
-- Answer the SPECIFIC question asked, don't give generic responses
-- Use **bold** for key terms, `code` for technical terms  
-- Keep it concise (2-3 sentences)
-- If the video doesn't have enough info, use your general knowledge
-- NO template responses - be specific to the question
+- Answer based on what the video transcript says, not just general knowledge
+- If the transcript mentions the topic, reference that specific content  
+- Use **bold** for key terms, keep response 2-3 sentences
+- Be specific to what's in the video
 
-{"This is a follow-up to previous discussion." if is_follow_up else ""}
-
-Answer the question directly:"""
+Answer based on the video content:"""
         
         # Return streaming response with conversation memory
         return StreamingResponse(
@@ -706,6 +847,25 @@ async def debug_conversation_memory():
             }
             for video_id, exchanges in conversation_memory.items()
         }
+    }
+
+@app.get("/debug/transcript-segments/{video_id}")
+async def debug_transcript_segments(video_id: str):
+    """Debug endpoint to see transcript segments for a specific video."""
+    segments = get_segments_for_video(video_id)
+    return {
+        "video_id": video_id,
+        "total_segments": len(segments),
+        "segments": [
+            {
+                "id": seg.id,
+                "start_time": seg.start_time,
+                "end_time": seg.end_time,
+                "text": seg.text,
+                "length": len(seg.text)
+            }
+            for seg in segments[:20]  # Show first 20
+        ]
     }
 
 if __name__ == "__main__":

@@ -136,7 +136,7 @@ def add_to_conversation_memory(video_id: str, user_message: str, ai_response: st
         logger.info(f"💭 Pruned {removed_count} old exchanges, kept last 5")
 
 def get_conversation_context(video_id: str) -> str:
-    """Get recent conversation history for context."""
+    """Get recent conversation history for context (like ChatGPT context window)."""
     if video_id not in conversation_memory or not conversation_memory[video_id]:
         logger.info(f"💭 No conversation history found for video {video_id}")
         return ""
@@ -145,85 +145,28 @@ def get_conversation_context(video_id: str) -> str:
     logger.info(f"💭 Found {len(exchanges)} conversation exchanges for video {video_id}")
     
     context_parts = []
-    # Use last 3 exchanges for better context, but with smart truncation
-    for i, exchange in enumerate(exchanges[-3:]):
-        # Keep user questions complete (they're usually short)
-        user_q = exchange['user']
+    # Use last 3 exchanges to build context window
+    for exchange in exchanges[-3:]:
+        # Format like a proper chat history
+        context_parts.append(f"Human: {exchange['user']}")
         
-        # Smart truncation for assistant responses
+        # Smart truncation for assistant responses while preserving key info
         assistant_resp = exchange['assistant']
-        if len(assistant_resp) > 200:
+        if len(assistant_resp) > 250:
             # Try to truncate at sentence boundary
             sentences = assistant_resp.split('. ')
             truncated = sentences[0]
-            if len(truncated) < 150 and len(sentences) > 1:
+            if len(truncated) < 200 and len(sentences) > 1:
                 truncated += '. ' + sentences[1]
             assistant_resp = truncated + "..." if len(truncated) < len(assistant_resp) else truncated
         
-        context_parts.append(f"Previous Q{i+1}: {user_q}")
-        context_parts.append(f"Previous A{i+1}: {assistant_resp}")
+        context_parts.append(f"Assistant: {assistant_resp}")
     
     context = "\n".join(context_parts) if context_parts else ""
     logger.info(f"💭 Built conversation context: {len(context)} chars")
     return context
 
-def is_follow_up_question(question: str, video_id: str = None) -> bool:
-    """Enhanced follow-up question detection."""
-    question_lower = question.lower().strip()
-    
-    # Keywords that strongly indicate follow-up
-    strong_follow_up_indicators = [
-        "what about", "but what", "also what", "and what", "more about", "explain more",
-        "what else", "tell me more", "elaborate", "expand on", "go deeper",
-        "additionally", "furthermore", "however", "though", "but", "also",
-        "can you explain", "could you explain", "what do you mean"
-    ]
-    
-    # Pronouns that suggest reference to previous context  
-    contextual_pronouns = [
-        "that", "this", "it", "they", "them", "those", "these",
-        "he", "she", "his", "her", "its"
-    ]
-    
-    # Question starters that are often follow-ups
-    follow_up_starters = [
-        "why", "how", "when", "where", "what if", "what happens",
-        "so", "ok", "okay", "right", "yes but", "yeah but"
-    ]
-    
-    # Check for strong indicators
-    has_strong_indicator = any(indicator in question_lower for indicator in strong_follow_up_indicators)
-    
-    # Check for contextual pronouns (suggesting reference to previous discussion)
-    has_contextual_reference = any(pronoun in question_lower.split() for pronoun in contextual_pronouns)
-    
-    # Check for follow-up starter patterns
-    has_follow_up_starter = any(question_lower.startswith(starter) for starter in follow_up_starters)
-    
-    # Short questions are often follow-ups
-    is_short_question = len(question.split()) <= 5 and "?" in question
-    
-    # Check if there's recent conversation history
-    has_conversation_history = False
-    if video_id and video_id in conversation_memory and conversation_memory[video_id]:
-        last_exchange_time = conversation_memory[video_id][-1]["timestamp"]
-        time_since_last = time.time() - last_exchange_time
-        has_conversation_history = time_since_last < 300  # Within 5 minutes
-    
-    # Combine indicators for final decision
-    follow_up_score = 0
-    if has_strong_indicator: follow_up_score += 3
-    if has_contextual_reference: follow_up_score += 2  
-    if has_follow_up_starter: follow_up_score += 1
-    if is_short_question: follow_up_score += 1
-    if has_conversation_history: follow_up_score += 2
-    
-    is_follow_up = follow_up_score >= 2
-    
-    logger.info(f"🔄 Follow-up detection: '{question[:50]}...' Score: {follow_up_score} -> {is_follow_up}")
-    logger.info(f"   Strong: {has_strong_indicator}, Context: {has_contextual_reference}, Short: {is_short_question}, History: {has_conversation_history}")
-    
-    return is_follow_up
+# Removed complex follow-up detection - we now always use conversation history like ChatGPT
 
 def combine_adjacent_segments(segments: List[TranscriptSegment], similarities: np.ndarray) -> List[TranscriptSegment]:
     """Combine adjacent segments to reduce fragmentation and improve context"""
@@ -656,11 +599,10 @@ async def handle_query(request: QueryRequest):
     try:
         logger.info(f"Query request for videoId: {request.videoId}")
         
-        # Get conversation context for follow-up questions
+        # Always get conversation history (no need to detect follow-ups)
         conversation_context = get_conversation_context(request.videoId)
-        is_follow_up = is_follow_up_question(request.prompt, request.videoId)
         
-        logger.info(f"Query for video {request.videoId}: Follow-up: {is_follow_up}")
+        logger.info(f"Query for video {request.videoId}")
         logger.info(f"USER QUESTION: '{request.prompt}'")
         logger.info(f"Conversation context length: {len(conversation_context)} chars")
         
@@ -668,10 +610,6 @@ async def handle_query(request: QueryRequest):
         if request.videoId in conversation_memory:
             exchanges = conversation_memory[request.videoId]
             logger.info(f"💭 Memory state: {len(exchanges)} exchanges stored")
-            if exchanges:
-                last_exchange = exchanges[-1]
-                time_since_last = time.time() - last_exchange["timestamp"]
-                logger.info(f"💭 Last exchange was {time_since_last:.1f}s ago")
         else:
             logger.info(f"💭 No conversation memory exists for video {request.videoId}")
             
@@ -727,44 +665,23 @@ async def handle_query(request: QueryRequest):
         logger.info(f"RAG: Context built with ~{total_context_tokens} tokens")
         logger.info(f"🎥 VIDEO CONTEXT: '{context[:300]}...' " if len(context) > 300 else f"🎥 VIDEO CONTEXT: '{context}'")
         
-        # Build enhanced prompt focused on the actual question
+        # Build enhanced prompt with conversation history (like ChatGPT context window)
         context_type = "COMPLETE VIDEO TRANSCRIPT" if total_words <= 10000 else "RELEVANT VIDEO SEGMENTS"
         
-        if is_follow_up and conversation_context:
-            enhanced_prompt = f"""You are an AI tutor helping a user understand a video. This is a FOLLOW-UP question continuing our conversation.
+        enhanced_prompt = f"""You are an AI tutor helping a user understand a video.
 
-CURRENT FOLLOW-UP QUESTION: {request.prompt}
-
-PREVIOUS CONVERSATION CONTEXT:
-{conversation_context}
+{f"CONVERSATION HISTORY:\n{conversation_context}\n" if conversation_context else ""}CURRENT QUESTION: {request.prompt}
 
 {context_type} (from the video):
 {context}
 
-FOLLOW-UP INSTRUCTIONS:
-- This question builds on our previous discussion above
-- Reference relevant parts of our conversation when answering
-- Connect your answer to what we discussed before
-- Still use the video transcript as the primary source
-- Use **bold** for key terms, keep response 2-3 sentences
-- Show continuity with the previous conversation
-
-Provide a follow-up response that builds on our discussion:"""
-        else:
-            enhanced_prompt = f"""You are an AI tutor. The user is watching a video and asking questions about it.
-
-USER'S QUESTION: {request.prompt}
-
-{context_type} (what's being said in the video):
-{context}
-
 INSTRUCTIONS:
-- Answer based on what the video transcript says, not just general knowledge
-- If the transcript mentions the topic, reference that specific content  
+- Answer the current question using the video transcript as your primary source
+{f"- Consider our conversation history above when relevant to the current question" if conversation_context else ""}
 - Use **bold** for key terms, keep response 2-3 sentences
 - Be specific to what's in the video
 
-Answer based on the video content:"""
+Answer the question:"""
         
         # Return streaming response with conversation memory
         return StreamingResponse(

@@ -897,7 +897,16 @@ class VideoTutor {
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const data = line.slice(6);
-            if (data === '[DONE]') break;
+            if (data === '[DONE]') {
+              // Final parsing with complete text
+              const textDiv = messageElement.querySelector('div:last-child') as HTMLDivElement;
+              if (textDiv && assistantMessage) {
+                const finalParsed = this.parseMarkdown(assistantMessage);
+                console.log('🎓 FINAL Setting innerHTML to:', finalParsed);
+                textDiv.innerHTML = finalParsed;
+              }
+              break;
+            }
             
             try {
               const parsed = JSON.parse(data);
@@ -905,7 +914,9 @@ class VideoTutor {
                 assistantMessage += parsed.choices[0].delta.content;
                 const textDiv = messageElement.querySelector('div:last-child') as HTMLDivElement;
                 if (textDiv) {
-                  textDiv.innerHTML = this.parseMarkdown(assistantMessage);
+                  const parsed = this.parseMarkdown(assistantMessage);
+                  console.log('🎓 Setting innerHTML to:', parsed);
+                  textDiv.innerHTML = parsed;
                 }
               }
             } catch (e) {
@@ -913,6 +924,14 @@ class VideoTutor {
             }
           }
         }
+      }
+      
+      // Ensure final parsing is applied
+      const textDiv = messageElement.querySelector('div:last-child') as HTMLDivElement;
+      if (textDiv && assistantMessage) {
+        const finalParsed = this.parseMarkdown(assistantMessage);
+        console.log('🎓 BACKUP Final Setting innerHTML to:', finalParsed);
+        textDiv.innerHTML = finalParsed;
       }
     } catch (error) {
       console.error('🎓 VideoTutor: Error sending message:', error);
@@ -1004,23 +1023,30 @@ class VideoTutor {
   }
 
   private parseMarkdown(text: string): string {
-    return text
-      // Headers
-      .replace(/^### (.*$)/gm, '<h3 style="margin: 8px 0 4px 0; font-size: 16px; font-weight: 600; color: var(--text-primary);">$1</h3>')
-      .replace(/^## (.*$)/gm, '<h2 style="margin: 10px 0 6px 0; font-size: 18px; font-weight: 600; color: var(--text-primary);">$1</h2>')
-      .replace(/^# (.*$)/gm, '<h1 style="margin: 12px 0 8px 0; font-size: 20px; font-weight: 600; color: var(--text-primary);">$1</h1>')
-      // Bold
-      .replace(/\*\*(.*?)\*\*/g, '<strong style="font-weight: 600; color: var(--text-primary);">$1</strong>')
-      // Italic
-      .replace(/\*(.*?)\*/g, '<em style="font-style: italic; color: var(--text-secondary);">$1</em>')
-      // Code
-      .replace(/`([^`]+)`/g, '<code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; color: var(--text-primary);">$1</code>')
-      // Bullets
-      .replace(/^- (.*$)/gm, '<div style="margin: 4px 0; padding-left: 16px; position: relative;"><span style="position: absolute; left: 0; color: var(--text-primary);">•</span>$1</div>')
-      // Numbers
-      .replace(/^\d+\. (.*$)/gm, '<div style="margin: 4px 0; padding-left: 20px; position: relative;"><span style="position: absolute; left: 0; color: var(--text-primary); font-weight: 500;">1.</span>$1</div>')
+    console.log('🎓 BEFORE parsing:', text);
+    
+    // Remove markdown code block wrapper if present
+    let cleanText = text;
+    if (cleanText.startsWith('```markdown') || cleanText.startsWith('```')) {
+      cleanText = cleanText.replace(/^```(markdown)?\s*/, '').replace(/```\s*$/, '');
+    }
+    
+    // Apply markdown formatting
+    let result = cleanText
+      // Headers first (reduced spacing)
+      .replace(/^### (.+)$/gm, '<h3 style="margin: 4px 0 2px 0; font-size: 16px; font-weight: 600; color: var(--text-primary);">$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2 style="margin: 5px 0 3px 0; font-size: 18px; font-weight: 600; color: var(--text-primary);">$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1 style="margin: 6px 0 4px 0; font-size: 20px; font-weight: 600; color: var(--text-primary);">$1</h1>')
+      // Bold and code
+      .replace(/\*\*(.+?)\*\*/g, '<strong style="font-weight: 600; color: var(--text-primary);">$1</strong>')
+      .replace(/`(.+?)`/g, '<code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; color: var(--text-primary);">$1</code>')
+      // Bullet points (reduced spacing)
+      .replace(/^- (.+)$/gm, '<div style="margin: 2px 0; padding-left: 12px; position: relative;"><span style="position: absolute; left: 0; color: var(--text-primary);">•</span>$1</div>')
       // Line breaks
       .replace(/\n/g, '<br>');
+    
+    console.log('🎓 AFTER parsing:', result);
+    return result;
   }
 
   private addMessage(container: HTMLDivElement, text: string, type: 'user' | 'assistant' | 'error'): HTMLDivElement {

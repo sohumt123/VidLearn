@@ -278,7 +278,37 @@ def pcm_to_wav(pcm_data: bytes, sample_rate: int = 16000) -> bytes:
         return wav_buffer.getvalue()
 
 def transcribe_audio(audio_data: bytes) -> str:
-    """Transcribe audio using Whisper."""
+    """Transcribe audio using OpenAI Whisper API."""
+    if not openai_client:
+        return ""
+    
+    try:
+        # Convert PCM bytes to WAV format for OpenAI API
+        wav_data = pcm_to_wav(audio_data)
+        
+        # Create a temporary file-like object
+        audio_file = io.BytesIO(wav_data)
+        audio_file.name = "audio.wav"  # Required for OpenAI API
+        
+        # Use OpenAI Whisper API
+        transcript = openai_client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            language="en",
+            response_format="text"
+        )
+        
+        result = transcript.strip() if transcript else ""
+        logger.info(f"OpenAI Whisper transcribed audio -> '{result}'")
+        return result
+    
+    except Exception as e:
+        logger.error(f"OpenAI Whisper transcription error: {e}")
+        # Fallback to local whisper if available
+        return transcribe_audio_local(audio_data)
+
+def transcribe_audio_local(audio_data: bytes) -> str:
+    """Fallback: Transcribe audio using local Whisper model."""
     if not whisper_model:
         return ""
     
@@ -301,11 +331,11 @@ def transcribe_audio(audio_data: bytes) -> str:
                 text_parts.append(segment.text.strip())
         
         result = " ".join(text_parts)
-        logger.info(f"Whisper transcribed {len(audio_np)/16000:.2f}s audio -> '{result}'")
+        logger.info(f"Local Whisper (fallback) transcribed {len(audio_np)/16000:.2f}s audio -> '{result}'")
         return result
     
     except Exception as e:
-        logger.error(f"Transcription error: {e}")
+        logger.error(f"Local Whisper transcription error: {e}")
         return ""
 
 def find_relevant_segments(video_id: str, query: str, max_segments: int = None) -> List[TranscriptSegment]:
@@ -551,10 +581,8 @@ async def handle_query(request: QueryRequest):
         conversation_context = get_conversation_context(request.videoId)
         is_follow_up = is_follow_up_question(request.prompt)
         
-        # Detect question type for targeted response
-        question_type = detect_question_type(request.prompt)
-        response_focus = get_response_focus(question_type)
-        logger.info(f"Query for video {request.videoId}: Question type: {question_type}, Follow-up: {is_follow_up}")
+        logger.info(f"Query for video {request.videoId}: Follow-up: {is_follow_up}")
+        logger.info(f"USER QUESTION: '{request.prompt}'")
         logger.info(f"Conversation context length: {len(conversation_context)} chars")
         if conversation_context:
             logger.info(f"Context preview: {conversation_context[:200]}...")
@@ -576,25 +604,26 @@ async def handle_query(request: QueryRequest):
         context = "\n".join(context_parts) if context_parts else "No relevant transcript context found."
         logger.info(f"RAG: Context built with ~{total_context_tokens} tokens")
         
-        # Build concise enhanced prompt
-        enhanced_prompt = f"""You are an AI Video Tutor. Provide CONCISE, TO-THE-POINT explanations.
+        # Build enhanced prompt focused on the actual question
+        enhanced_prompt = f"""You are a smart AI tutor. Answer the specific question asked using both the video content and your knowledge.
 
-RESPONSE RULES:
-- Keep answers SHORT and DIRECT (2-3 sentences max)
-- Use simple language, avoid jargon
-- Focus on the essential concept only
-- Use markdown formatting (**bold**, `code`, ### headers, - bullets)
+QUESTION TO ANSWER: {request.prompt}
 
-{f"CONTEXT FROM PREVIOUS CHAT:\n{conversation_context}\n" if conversation_context else ""}
-
-VIDEO TRANSCRIPT:
+VIDEO CONTENT:
 {context}
 
-QUESTION: {request.prompt}
+{f"PREVIOUS CHAT:\n{conversation_context}\n" if conversation_context else ""}
 
-{"This is a FOLLOW-UP question - reference previous context briefly." if is_follow_up else ""}
+INSTRUCTIONS:
+- Answer the SPECIFIC question asked, don't give generic responses
+- Use **bold** for key terms, `code` for technical terms  
+- Keep it concise (2-3 sentences)
+- If the video doesn't have enough info, use your general knowledge
+- NO template responses - be specific to the question
 
-Give a concise, formatted answer:"""
+{"This is a follow-up to previous discussion." if is_follow_up else ""}
+
+Answer the question directly:"""
         
         # Return streaming response with conversation memory
         return StreamingResponse(
@@ -655,6 +684,27 @@ async def debug_rag_config():
         "cache_info": {
             "cached_videos": list(transcript_cache.keys()),
             "cache_sizes": {vid: len(segments) for vid, segments in transcript_cache.items()}
+        }
+    }
+
+@app.get("/debug/conversation-memory")
+async def debug_conversation_memory():
+    """Debug endpoint to see current conversation memory."""
+    return {
+        "total_videos_with_conversations": len(conversation_memory),
+        "conversations": {
+            video_id: {
+                "exchange_count": len(exchanges),
+                "exchanges": [
+                    {
+                        "user": exchange["user"][:100] + "..." if len(exchange["user"]) > 100 else exchange["user"],
+                        "assistant": exchange["assistant"][:100] + "..." if len(exchange["assistant"]) > 100 else exchange["assistant"],
+                        "timestamp": exchange["timestamp"]
+                    }
+                    for exchange in exchanges[-3:]  # Show last 3
+                ]
+            }
+            for video_id, exchanges in conversation_memory.items()
         }
     }
 
